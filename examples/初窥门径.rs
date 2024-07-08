@@ -50,6 +50,7 @@ impl ProxyHttp for Server {
     }
 }
 
+// 需要注意，此为演示代码因此有部分代码直接使用unwrap，正式使用时建议针对错误按正常处理
 // RUST_LOG=INFO cargo run --example 初窥门径
 fn main() {
     env_logger::init();
