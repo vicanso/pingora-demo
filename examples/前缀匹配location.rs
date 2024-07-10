@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use futures_util::FutureExt;
 use log::{error, info};
 use once_cell::sync::Lazy;
+use pingora::http::RequestHeader;
 use pingora::lb::selection::RoundRobin;
 use pingora::lb::{discovery, Backend, Backends, LoadBalancer};
 use pingora::prelude::TcpHealthCheck;
@@ -108,6 +109,26 @@ struct Loation {
     replace: bool,
 }
 
+impl Loation {
+    pub fn matched(&self, path: &str) -> bool {
+        // 判断是否包括该前缀
+        path.starts_with(&self.prefix)
+    }
+    pub fn rewrite(&self, header: &mut RequestHeader) -> Option<String> {
+        // 无需重写
+        if !self.replace {
+            return None;
+        }
+        // 重写url，删除前缀
+        let path = header.uri.path();
+        let mut uri = path.substring(self.prefix.len(), path.len()).to_string();
+        if let Some(query) = header.uri.query() {
+            uri = format!("{path}?{query}");
+        }
+        Some(uri)
+    }
+}
+
 struct Server {
     // 监听地址
     addr: String,
@@ -149,18 +170,12 @@ impl ProxyHttp for Server {
         let location = self
             .locations
             .iter()
-            .find(|item| path.starts_with(item.prefix.as_str()))
+            .find(|item| item.matched(&path))
             .ok_or(new_internal_error(
                 500,
                 "无法获取匹配的location".to_string(),
             ))?;
-        if location.replace {
-            let mut uri = path
-                .substring(location.prefix.len(), path.len())
-                .to_string();
-            if let Some(query) = header.uri.query() {
-                uri = format!("{path}?{query}");
-            }
+        if let Some(uri) = location.rewrite(header) {
             if let Err(e) = uri.parse::<http::Uri>().map(|uri| header.set_uri(uri)) {
                 error!("error: {}", e.to_string());
             }
@@ -221,6 +236,7 @@ fn main() {
     // 初始化服务，监听地址为：127.0.0.1:6118
     let server = Server::new(
         "127.0.0.1:6118",
+        // 需要注意要按权重添加
         vec![
             Loation {
                 prefix: "/diving".to_string(),
