@@ -4,7 +4,7 @@
 
 ### 自定义出错响应
 
-pingora的`respond_error`函数在响应出错时，因为未针对错误类型判断，所有的出错响应均设置了`self.set_keepalive(None)`，因此在编写自定义的错误处理，可直接设置响应数据，而非返回`Err(error)`的形式。
+pingora的`respond_error`函数在响应出错时，因为未针对错误类型判断，所有的出错响应均设置了`self.set_keepalive(None)`，因此在编写自定义的错误处理，可直接设置响应数据，而非返回`Err(error)`的形式，避免在业务逻辑上出错时请求无法复用。
 
 如下面的例子是在`request_filter`的认证失败，直接返回`401`:
 
