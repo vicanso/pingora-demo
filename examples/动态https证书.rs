@@ -178,13 +178,18 @@ impl Server {
         }
     }
     // 监听对应地址，并返回对应的service
-    pub fn run(self, conf: &Arc<ServerConf>) -> Service<HttpProxy<Server>> {
+    pub fn run(self, conf: &Arc<ServerConf>, tls: bool) -> Service<HttpProxy<Server>> {
         let addr = self.addr.clone();
         // 创建转发http的服务
         let mut lb = http_proxy_service(conf, self);
-        let tls_settings = TlsSettings::with_callbacks(Box::new(DynamicCertificate {})).unwrap();
-        // 添加tls监听地址以及证书处理逻辑
-        lb.add_tls_with_settings(&addr, None, tls_settings);
+        if tls {
+            let tls_settings =
+                TlsSettings::with_callbacks(Box::new(DynamicCertificate {})).unwrap();
+            // 添加tls监听地址以及证书处理逻辑
+            lb.add_tls_with_settings(&addr, None, tls_settings);
+        } else {
+            lb.add_tcp(&addr);
+        }
         // 返回pingora service，用于添加至实例中
         lb
     }
@@ -204,6 +209,8 @@ impl ProxyHttp for Server {
     where
         Self::CTX: Send + Sync,
     {
+        // 如果有对应的认证token，则返回对应数据
+        // 用于let's encrypt 的http challenge验证
         if let Some(token) = lets_encrypt::get_auth_token(session.req_header().uri.path()) {
             let mut header = ResponseHeader::build(StatusCode::OK, Some(3))?;
             let body = Bytes::from(token);
@@ -270,6 +277,7 @@ mod lets_encrypt {
     use pingora::server::ShutdownWatch;
     use pingora::services::background::BackgroundService;
     use std::time::Duration;
+    use tokio::time::interval;
 
     static AUTH_TOKENS: Lazy<DashMap<String, String>> = Lazy::new(|| DashMap::new());
 
@@ -295,7 +303,17 @@ mod lets_encrypt {
     impl BackgroundService for LetsEncryptService {
         async fn start(&self, mut shutdown: ShutdownWatch) {
             new_lets_encrypt(&self.domains).await;
-            shutdown.changed().await.unwrap();
+            let mut period = interval(Duration::from_secs(30 * 24 * 3600));
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => {
+                        break;
+                    }
+                    _ = period.tick() => {
+                       new_lets_encrypt(&self.domains).await;
+                    }
+                }
+            }
         }
     }
 
@@ -416,6 +434,8 @@ mod lets_encrypt {
             }
         };
         // 将域名与对其对应证书添加至全局证书实例中
+        // 实际使用时，由于let's encrypt有限制申请证书的次数
+        // 因此需要将申请到的证书保存，用于后续使用
         for domain in domains {
             add_certificate(
                 domain,
@@ -459,12 +479,6 @@ fn main() {
     ));
     add_upstream(diving_upstream, diving);
 
-    // 添加localhost方便开发测试
-    // for domain in ["pingap.io", "github.com", "localhost"] {
-    //     let (cert, key) = get_tls_pem();
-    //     add_certificate(domain, cert.as_bytes(), key.as_bytes());
-    // }
-
     // 初始化服务，监听地址为：127.0.0.1:6118
     let tls_server = Server::new(
         "127.0.0.1:443",
@@ -488,12 +502,13 @@ fn main() {
         // 需要注意要按权重添加
         vec![],
     );
+    // 后台服务运行申请证书逻辑
     instance.add_service(background_service(
         "letsEncrypt",
         lets_encrypt::new_lets_encrypt_service(vec!["pingap.io".to_string()]),
     ));
     // 添加http服务至当前实例中
-    instance.add_service(tls_server.run(&instance.configuration));
-    instance.add_service(http_server.run(&instance.configuration));
+    instance.add_service(tls_server.run(&instance.configuration, true));
+    instance.add_service(http_server.run(&instance.configuration, false));
     instance.run_forever();
 }
