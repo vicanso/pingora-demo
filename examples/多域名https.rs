@@ -5,8 +5,9 @@ use log::{error, info};
 use once_cell::sync::Lazy;
 use pingora::http::RequestHeader;
 use pingora::lb::selection::RoundRobin;
+use pingora::lb::Extensions;
 use pingora::lb::{discovery, Backend, Backends, LoadBalancer};
-use pingora::listeners::TlsSettings;
+use pingora::listeners::tls::TlsSettings;
 use pingora::prelude::TcpHealthCheck;
 use pingora::protocols::l4::socket::SocketAddr;
 use pingora::proxy::{http_proxy_service, HttpProxy, ProxyHttp, Session};
@@ -101,6 +102,7 @@ impl Upstream {
                 backends.push(Backend {
                     addr: SocketAddr::Inet(item),
                     weight: 1,
+                    ext: Extensions::new(),
                 });
             }
         }
